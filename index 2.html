@@ -1,0 +1,416 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<meta name="theme-color" content="#0e2a1d">
+<title>Pocket Putt</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bowlby+One&family=Familjen+Grotesk:wght@400;600;700&display=swap">
+<style>
+/* Layout: one-screen app. Header scorecard, green fills the middle, controls in a thumb zone at the bottom. */
+:root{
+  --ink:#0e2a1d;        /* night green, page ground */
+  --felt:#2a7a4f;       /* putting carpet */
+  --felt-line:#33885a;  /* carpet stripe */
+  --rail:#8a5531;       /* wooden rail */
+  --rail-hi:#b0744a;
+  --chalk:#f5f2e8;      /* text, ball */
+  --flag:#e2463a;
+  --sun:#f2c14e;        /* accent: buttons, brand */
+  --muted:rgba(245,242,232,.62);
+  --display:"Bowlby One",Impact,"Arial Black",sans-serif;
+  --body:"Familjen Grotesk",system-ui,-apple-system,"Segoe UI",sans-serif;
+  color-scheme:dark;
+}
+[hidden]{display:none!important}
+html,body{height:100%;margin:0;background:var(--ink);color:var(--chalk);font-family:var(--body);
+  overscroll-behavior:none;touch-action:none;-webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent}
+#app{display:flex;flex-direction:column;height:100%}
+header{display:flex;justify-content:space-between;align-items:flex-end;gap:12px;
+  padding:calc(env(safe-area-inset-top,0px) + 10px) max(16px,env(safe-area-inset-right,0px)) 8px max(16px,env(safe-area-inset-left,0px))}
+.brand{font-family:var(--display);font-size:20px;color:var(--sun);letter-spacing:.02em;line-height:1}
+.hole{font-size:13px;color:var(--muted);margin-top:4px}
+.card{text-align:right;font-variant-numeric:tabular-nums;font-size:13px;color:var(--muted)}
+.card b{display:block;color:var(--chalk);font-size:18px;font-weight:700}
+#stage{flex:1;position:relative;min-height:0}
+canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
+footer{display:grid;gap:8px;padding:8px max(16px,env(safe-area-inset-right,0px)) calc(env(safe-area-inset-bottom,0px) + 12px) max(16px,env(safe-area-inset-left,0px))}
+#status{font-size:15px;font-weight:600;min-height:1.3em}
+#readout{font-size:13px;color:var(--muted);font-variant-numeric:tabular-nums;min-height:1.2em}
+.row{display:flex;gap:8px}
+button{font:inherit;font-weight:700;font-size:17px;padding:14px 16px;border-radius:12px;border:0;background:var(--sun);color:var(--ink);cursor:pointer}
+button:focus-visible{outline:3px solid var(--chalk);outline-offset:2px}
+button:disabled{opacity:.45}
+#putt{flex:1}
+button.ghost{background:transparent;color:var(--chalk);border:1.5px solid rgba(245,242,232,.32);font-size:14px;padding:12px 14px}
+.overlay{position:absolute;inset:0;display:grid;place-items:center;padding:16px;background:rgba(14,42,29,.72)}
+.panel{background:var(--ink);border:1.5px solid rgba(245,242,232,.18);border-radius:16px;padding:20px;max-width:360px;display:grid;gap:12px}
+.panel h2{font-family:var(--display);font-weight:400;color:var(--sun);margin:0;font-size:24px;line-height:1.1}
+.panel p,.panel li{margin:0;font-size:15px;line-height:1.45}
+.panel ol{margin:0;padding-left:20px;display:grid;gap:6px}
+#debug{position:absolute;left:8px;top:8px;right:8px;background:rgba(14,42,29,.9);border:1px solid rgba(245,242,232,.2);border-radius:10px;
+  padding:10px 12px;font:12px/1.5 ui-monospace,Menlo,Consolas,monospace;font-variant-numeric:tabular-nums;display:grid;gap:6px}
+#debug label{display:flex;align-items:center;gap:8px;font-family:var(--body);font-size:13px}
+#debug input[type=range]{flex:1}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <div>
+      <div class="brand">Pocket Putt</div>
+      <div class="hole" id="holeName">Hole 1</div>
+    </div>
+    <div class="card"><b id="strokes">0</b><span id="total">Total E</span></div>
+  </header>
+  <div id="stage">
+    <canvas id="c"></canvas>
+    <div id="debug" hidden>
+      <div id="dbg">waiting for sensor…</div>
+      <label for="pace">Pace <input id="pace" type="range" min="0.4" max="2.5" step="0.05" value="1"><span id="paceV">1.00</span></label>
+      <label for="inv"><input id="inv" type="checkbox"> Flip face direction (if putts go the wrong way)</label>
+    </div>
+    <div class="overlay" id="howto">
+      <div class="panel">
+        <h2>Your phone is the putter</h2>
+        <ol>
+          <li>Hold the phone upright in both hands like a putter grip, arms hanging, screen facing the hole.</li>
+          <li>Tap <b>Putt</b> and hold still until the beep.</li>
+          <li>Make a smooth pendulum stroke. Stroke speed sets distance. Twisting the phone opens or closes the face.</li>
+        </ol>
+        <p style="color:var(--muted)">Swipe the green to aim. No sensor? Drag back from the ball and release.</p>
+        <button id="go">Tee it up</button>
+      </div>
+    </div>
+    <div class="overlay" id="sunk" hidden>
+      <div class="panel">
+        <h2 id="sunkTitle">In the cup</h2>
+        <p id="sunkText"></p>
+        <button id="next">Next hole</button>
+      </div>
+    </div>
+  </div>
+  <footer>
+    <div id="status">Swipe to aim, then tap Putt.</div>
+    <div id="readout"></div>
+    <div class="row">
+      <button id="putt">Putt</button>
+      <button class="ghost" id="dbgBtn" aria-pressed="false">Sensors</button>
+    </div>
+  </footer>
+</div>
+<script>
+"use strict";
+// ---------- World constants (units: feet, seconds) ----------
+const DECEL = 1.6;       // rolling friction, ft/s^2 (a medium-fast carpet)
+const BALL_R = 0.12;     // drawn a bit large for a phone screen
+const CUP_R = 0.24;
+const CAPTURE_V = 5.0;   // faster than this rolls over the cup
+const REST = 0.72;       // wall bounce
+const FACE_SHARE = 0.85; // how much face angle sets start direction
+const DEG_TO_FTPS = 0.065; // ball ft/s per deg/s of stroke rotation, before pace
+
+const HOLES = [
+  { name:"Straightaway", par:2, bounds:[0,0,8,20], tee:[4,17.5], cup:[4,3], blocks:[] },
+  { name:"The Gate", par:2, bounds:[0,0,10,20], tee:[2.5,17.5], cup:[7.5,3],
+    blocks:[[0,9.2,3.9,10.6],[6.1,9.2,10,10.6]] },
+  { name:"Dogleg", par:3, bounds:[0,0,14,20], tee:[3.5,17.5], cup:[11,3], blocks:[[0,0,7.5,10]] },
+  { name:"Bumper Garden", par:2, bounds:[0,0,10,22], tee:[5,19.5], cup:[5,3],
+    blocks:[[3,7.5,4.6,9.1],[5.6,11.5,7.2,13.1],[2.6,15,4.2,16.6]] },
+];
+
+// ---------- State ----------
+let hi = 0, strokes = 0, totalStrokes = 0, totalPar = 0;
+let ball = {x:0,y:0,vx:0,vy:0};
+let aim = 0;
+let state = "idle"; // idle | stroke | rolling | sunk
+const settings = { pace:1, invertFace:false };
+try { Object.assign(settings, JSON.parse(localStorage.getItem("pp-settings")||"{}")); } catch(e) {}
+function saveSettings(){ try { localStorage.setItem("pp-settings", JSON.stringify(settings)); } catch(e) {} }
+
+const $ = id => document.getElementById(id);
+const canvas = $("c"), ctx = canvas.getContext("2d");
+const say = t => { $("status").textContent = t; };
+
+// ---------- Audio + haptics ----------
+let actx = null;
+function beep(freq, dur, vol=0.15){
+  if (!actx) return;
+  const o = actx.createOscillator(), g = actx.createGain();
+  o.frequency.value = freq; o.type = "sine";
+  g.gain.setValueAtTime(vol, actx.currentTime);
+  g.gain.exponentialRampToValueAtTime(0.001, actx.currentTime + dur);
+  o.connect(g).connect(actx.destination); o.start(); o.stop(actx.currentTime + dur);
+}
+function buzz(ms){ try { navigator.vibrate && navigator.vibrate(ms); } catch(e) {} }
+
+// ---------- View ----------
+let view = {s:1, ox:0, oy:0, w:0, h:0};
+function fit(){
+  const r = $("stage").getBoundingClientRect(), dpr = window.devicePixelRatio || 1;
+  canvas.width = Math.round(r.width*dpr); canvas.height = Math.round(r.height*dpr);
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+  const b = HOLES[hi].bounds, bw = b[2]-b[0], bh = b[3]-b[1], pad = 0.8;
+  const s = Math.min((r.width-24)/(bw+2*pad), (r.height-16)/(bh+2*pad));
+  view = { s, w:r.width, h:r.height, ox:(r.width-bw*s)/2 - b[0]*s, oy:(r.height-bh*s)/2 - b[1]*s };
+}
+const X = x => x*view.s + view.ox, Y = y => y*view.s + view.oy;
+
+// ---------- Holes ----------
+function aimAtCup(){ const c = HOLES[hi].cup; aim = Math.atan2(c[1]-ball.y, c[0]-ball.x); }
+function loadHole(i){
+  hi = i; const h = HOLES[i];
+  ball = {x:h.tee[0], y:h.tee[1], vx:0, vy:0}; strokes = 0; state = "idle";
+  aimAtCup(); fit(); hud(); $("readout").textContent = "";
+  say("Swipe to aim, then tap Putt.");
+}
+function hud(){
+  const h = HOLES[hi];
+  $("holeName").textContent = `Hole ${hi+1} · ${h.name} · Par ${h.par}`;
+  $("strokes").textContent = strokes;
+  const diff = totalStrokes - totalPar;
+  $("total").textContent = "Total " + (diff===0 ? "E" : (diff>0?"+":"") + diff);
+}
+
+// ---------- Physics ----------
+function collideRect(r){
+  const cx = Math.max(r[0], Math.min(ball.x, r[2])), cy = Math.max(r[1], Math.min(ball.y, r[3]));
+  let dx = ball.x-cx, dy = ball.y-cy, d = Math.hypot(dx,dy);
+  if (d >= BALL_R) return;
+  let nx, ny;
+  if (d > 1e-6) { nx = dx/d; ny = dy/d; }
+  else { // center inside: push out along the shallowest side
+    const pen = [ball.x-r[0], r[2]-ball.x, ball.y-r[1], r[3]-ball.y], m = Math.min(...pen);
+    [nx,ny] = [[-1,0],[1,0],[0,-1],[0,1]][pen.indexOf(m)]; d = -m;
+  }
+  ball.x += nx*(BALL_R-d); ball.y += ny*(BALL_R-d);
+  const vn = ball.vx*nx + ball.vy*ny;
+  if (vn < 0) { ball.vx -= (1+REST)*vn*nx; ball.vy -= (1+REST)*vn*ny; beep(220, .05, .08); }
+}
+function physics(dt){
+  if (state !== "rolling") return;
+  const h = HOLES[hi], b = h.bounds, n = 8, sdt = dt/n;
+  for (let i=0; i<n; i++){
+    let sp = Math.hypot(ball.vx, ball.vy);
+    // gentle cup funnel when slow and close
+    const cdx = h.cup[0]-ball.x, cdy = h.cup[1]-ball.y, cd = Math.hypot(cdx,cdy);
+    if (cd < CUP_R*1.8 && sp < 2.5 && cd > 1e-4){ ball.vx += cdx/cd*3*sdt; ball.vy += cdy/cd*3*sdt; }
+    sp = Math.hypot(ball.vx, ball.vy);
+    if (sp > 0){ const ns = Math.max(0, sp - DECEL*sdt); ball.vx *= ns/sp; ball.vy *= ns/sp; sp = ns; }
+    ball.x += ball.vx*sdt; ball.y += ball.vy*sdt;
+    if (ball.x-BALL_R < b[0]){ ball.x = b[0]+BALL_R; ball.vx = Math.abs(ball.vx)*REST; }
+    if (ball.x+BALL_R > b[2]){ ball.x = b[2]-BALL_R; ball.vx = -Math.abs(ball.vx)*REST; }
+    if (ball.y-BALL_R < b[1]){ ball.y = b[1]+BALL_R; ball.vy = Math.abs(ball.vy)*REST; }
+    if (ball.y+BALL_R > b[3]){ ball.y = b[3]-BALL_R; ball.vy = -Math.abs(ball.vy)*REST; }
+    h.blocks.forEach(collideRect);
+    if (Math.hypot(h.cup[0]-ball.x, h.cup[1]-ball.y) < CUP_R && sp < CAPTURE_V){ sink(); return; }
+    if (sp < 0.04){ ball.vx = ball.vy = 0; state = "idle"; aimAtCup(); say("Swipe to aim, then tap Putt."); return; }
+  }
+}
+function shoot(speed, faceDeg){
+  const dir = aim + FACE_SHARE*faceDeg*Math.PI/180;
+  ball.vx = Math.cos(dir)*speed; ball.vy = Math.sin(dir)*speed;
+  strokes++; state = "rolling"; hud(); say("Rolling…");
+}
+function sink(){
+  state = "sunk"; ball.vx = ball.vy = 0; ball.x = HOLES[hi].cup[0]; ball.y = HOLES[hi].cup[1];
+  const h = HOLES[hi]; totalStrokes += strokes; totalPar += h.par; hud();
+  const d = strokes - h.par;
+  const word = strokes===1 ? "Hole in one" : ({"-2":"Eagle","-1":"Birdie","0":"Par","1":"Bogey","2":"Double bogey"})[d] || `+${d}`;
+  beep(660,.12); setTimeout(()=>beep(880,.18),120); buzz([40,60,40]);
+  const last = hi === HOLES.length-1;
+  $("sunkTitle").textContent = word;
+  $("sunkText").textContent = last
+    ? `${strokes} stroke${strokes>1?"s":""} on the last. Round: ${totalStrokes} on a par ${totalPar}.`
+    : `${strokes} stroke${strokes>1?"s":""} on a par ${h.par}.`;
+  $("next").textContent = last ? "Play again" : "Next hole";
+  $("sunk").hidden = false; say("");
+}
+$("next").onclick = () => {
+  $("sunk").hidden = true;
+  if (hi === HOLES.length-1){ totalStrokes = totalPar = 0; loadHole(0); } else loadHole(hi+1);
+};
+
+// ---------- Motion stroke detection ----------
+// Phone held upright, screen facing the hole. The pendulum stroke rotates the
+// phone about its own x-axis (rotationRate.beta); twisting the face rotates it
+// about its y-axis (rotationRate.gamma). Both integrated from a still address.
+const M = { seen:false, last:0, phase:"off", t0:0, calib:[], bias:{b:0,g:0},
+  pitch:0, yaw:0, sign:0, maxBack:0, hist:[], rb:0, rg:0, rate:0, count:0, rateT:0 };
+
+function onMotion(e){
+  const r = e.rotationRate; if (!r || r.beta == null) return;
+  const now = performance.now();
+  let dt = (now - M.last)/1000; M.last = now; if (!(dt > 0 && dt < 0.1)) dt = 1/60;
+  M.seen = true; M.rb = r.beta; M.rg = r.gamma || 0; M.count++;
+  if (now - M.rateT > 1000){ M.rate = M.count; M.count = 0; M.rateT = now; }
+
+  if (M.phase === "calib"){
+    M.calib.push([M.rb, M.rg]);
+    if (now - M.t0 > 600){
+      const n = M.calib.length || 1;
+      M.bias = { b: M.calib.reduce((a,v)=>a+v[0],0)/n, g: M.calib.reduce((a,v)=>a+v[1],0)/n };
+      M.pitch = M.yaw = 0; M.hist = []; M.phase = "ready"; M.t0 = now;
+      beep(880,.1); buzz(30); say("Make your stroke.");
+    }
+  } else if (M.phase === "ready" || M.phase === "back" || M.phase === "down"){
+    const wb = M.rb - M.bias.b, wg = M.rg - M.bias.g;
+    M.pitch += wb*dt; M.yaw += wg*dt;
+    M.hist.push(wb); if (M.hist.length > 4) M.hist.shift();
+    if (M.phase === "ready"){
+      if (Math.abs(M.pitch) > 5){ M.phase = "back"; M.sign = Math.sign(M.pitch); M.maxBack = Math.abs(M.pitch); }
+      else if (now - M.t0 > 8000) cancelStroke("Timed out. Tap Putt to try again.");
+    } else {
+      const p = M.pitch*M.sign;
+      if (p > M.maxBack) M.maxBack = p;
+      if (M.phase === "back" && p < M.maxBack - 1.5) M.phase = "down";
+      if (M.phase === "down" && p <= 0){
+        const angVel = Math.max(...M.hist.map(v => -v*M.sign));
+        impact(angVel, M.yaw, M.maxBack);
+      } else if (now - M.t0 > 10000) cancelStroke("Stroke not detected. Tap Putt to try again.");
+    }
+  }
+}
+window.addEventListener("devicemotion", onMotion);
+
+function impact(angVel, yaw, back){
+  M.phase = "off";
+  const face = (settings.invertFace ? -1 : 1) * yaw;
+  const speed = Math.min(26, Math.max(0.3, angVel*DEG_TO_FTPS*settings.pace));
+  beep(1200,.04,.25); buzz(25);
+  const side = Math.abs(face) < 0.5 ? "square" : `${Math.abs(face).toFixed(1)}° ${face>0?"right":"left"}`;
+  $("readout").textContent = `Stroke ${angVel.toFixed(0)}°/s · Back ${back.toFixed(0)}° · Face ${side} · Ball ${speed.toFixed(1)} ft/s`;
+  shoot(speed, face);
+  $("putt").disabled = false;
+}
+function cancelStroke(msg){ M.phase = "off"; state = "idle"; say(msg); $("putt").disabled = false; }
+
+let wake = null;
+$("putt").onclick = async () => {
+  if (state !== "idle") return;
+  try { if (!actx) actx = new (window.AudioContext||window.webkitAudioContext)(); actx.resume(); } catch(e) {}
+  try { if (!wake && navigator.wakeLock) wake = await navigator.wakeLock.request("screen"); } catch(e) {}
+  if (typeof DeviceMotionEvent !== "undefined" && typeof DeviceMotionEvent.requestPermission === "function"){
+    try {
+      const p = await DeviceMotionEvent.requestPermission();
+      if (p !== "granted"){ say("Motion access was declined. Drag back from the ball to putt instead."); return; }
+    } catch(e){ say("Motion needs this page opened over https. Drag back from the ball to putt instead."); return; }
+  }
+  state = "stroke"; M.phase = "calib"; M.calib = []; M.t0 = performance.now();
+  $("putt").disabled = true; say("Hold still…"); beep(440,.08);
+  setTimeout(() => {
+    if (!M.seen && M.phase === "calib"){
+      M.phase = "off"; state = "idle"; $("putt").disabled = false;
+      say("No motion sensor here. Drag back from the ball and release to putt.");
+    }
+  }, 1500);
+};
+
+// ---------- Touch: swipe to aim, drag from ball to putt ----------
+let drag = null;
+canvas.addEventListener("pointerdown", e => {
+  if (state !== "idle") return;
+  const r = canvas.getBoundingClientRect(), px = e.clientX-r.left, py = e.clientY-r.top;
+  const near = Math.hypot(px-X(ball.x), py-Y(ball.y)) < 44;
+  drag = { mode: near ? "shot" : "aim", x0:px, y0:py, x:px, y:py };
+  canvas.setPointerCapture(e.pointerId);
+});
+canvas.addEventListener("pointermove", e => {
+  if (!drag) return;
+  const r = canvas.getBoundingClientRect(), px = e.clientX-r.left, py = e.clientY-r.top;
+  if (drag.mode === "aim") aim += (px - drag.x)*0.006;
+  drag.x = px; drag.y = py;
+});
+canvas.addEventListener("pointerup", () => {
+  if (!drag) return;
+  if (drag.mode === "shot"){
+    const dx = X(ball.x)-drag.x, dy = Y(ball.y)-drag.y, len = Math.hypot(dx,dy)/view.s;
+    if (len > 0.3){
+      try { if (!actx) actx = new (window.AudioContext||window.webkitAudioContext)(); } catch(e) {}
+      aim = Math.atan2(dy, dx);
+      const speed = Math.min(26, len*2.4*settings.pace);
+      $("readout").textContent = `Drag putt · Ball ${speed.toFixed(1)} ft/s`;
+      shoot(speed, 0);
+    }
+  }
+  drag = null;
+});
+
+// ---------- Debug panel ----------
+$("pace").value = settings.pace; $("paceV").textContent = (+settings.pace).toFixed(2);
+$("inv").checked = settings.invertFace;
+$("pace").oninput = e => { settings.pace = +e.target.value; $("paceV").textContent = settings.pace.toFixed(2); saveSettings(); };
+$("inv").onchange = e => { settings.invertFace = e.target.checked; saveSettings(); };
+$("dbgBtn").onclick = () => {
+  const d = $("debug"); d.hidden = !d.hidden; $("dbgBtn").setAttribute("aria-pressed", String(!d.hidden));
+};
+setInterval(() => {
+  if ($("debug").hidden) return;
+  $("dbg").textContent = M.seen
+    ? `rate β ${M.rb.toFixed(0).padStart(5)}°/s  γ ${M.rg.toFixed(0).padStart(5)}°/s  ${M.rate} Hz\n` +
+      `stroke ${M.pitch.toFixed(1).padStart(6)}°  face ${M.yaw.toFixed(1).padStart(6)}°  phase ${M.phase}`
+    : "No sensor data yet. Tap Putt once to grant motion access.";
+  $("dbg").style.whiteSpace = "pre";
+}, 100);
+
+$("go").onclick = () => {
+  $("howto").hidden = true;
+  try { if (!actx) actx = new (window.AudioContext||window.webkitAudioContext)(); } catch(e) {}
+};
+
+// ---------- Render ----------
+function roundRect(x,y,w,h,r){ ctx.beginPath(); ctx.roundRect ? ctx.roundRect(x,y,w,h,r) : ctx.rect(x,y,w,h); }
+function draw(){
+  const h = HOLES[hi], b = h.bounds, s = view.s;
+  const css = getComputedStyle(document.documentElement), v = n => css.getPropertyValue(n).trim();
+  ctx.clearRect(0,0,view.w,view.h);
+  // rail
+  const rw = 0.35*s;
+  ctx.fillStyle = v("--rail"); roundRect(X(b[0])-rw, Y(b[1])-rw, (b[2]-b[0])*s+2*rw, (b[3]-b[1])*s+2*rw, rw); ctx.fill();
+  // felt with mow stripes
+  ctx.fillStyle = v("--felt"); ctx.fillRect(X(b[0]), Y(b[1]), (b[2]-b[0])*s, (b[3]-b[1])*s);
+  ctx.fillStyle = v("--felt-line");
+  for (let y=b[1]; y<b[3]; y+=2) ctx.fillRect(X(b[0]), Y(y), (b[2]-b[0])*s, Math.min(1, b[3]-y)*s);
+  // obstacles
+  h.blocks.forEach(r => {
+    ctx.fillStyle = v("--rail"); ctx.fillRect(X(r[0]), Y(r[1]), (r[2]-r[0])*s, (r[3]-r[1])*s);
+    ctx.fillStyle = v("--rail-hi"); ctx.fillRect(X(r[0]), Y(r[1]), (r[2]-r[0])*s, 0.12*s);
+  });
+  // tee
+  ctx.fillStyle = "rgba(245,242,232,.25)"; ctx.fillRect(X(h.tee[0])-0.5*s, Y(h.tee[1])-0.08*s, s, 0.16*s);
+  // cup + flag
+  ctx.fillStyle = "#06130c"; ctx.beginPath(); ctx.arc(X(h.cup[0]), Y(h.cup[1]), CUP_R*s, 0, 7); ctx.fill();
+  if (state !== "sunk"){
+    const fx = X(h.cup[0]), fy = Y(h.cup[1]);
+    ctx.strokeStyle = v("--chalk"); ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(fx, fy); ctx.lineTo(fx, fy-1.6*s); ctx.stroke();
+    ctx.fillStyle = v("--flag"); ctx.beginPath(); ctx.moveTo(fx, fy-1.6*s); ctx.lineTo(fx+0.8*s, fy-1.35*s); ctx.lineTo(fx, fy-1.1*s); ctx.fill();
+  }
+  // aim line
+  if (state === "idle" || state === "stroke"){
+    ctx.strokeStyle = "rgba(245,242,232,.55)"; ctx.lineWidth = 2; ctx.setLineDash([4,6]);
+    ctx.beginPath(); ctx.moveTo(X(ball.x), Y(ball.y));
+    ctx.lineTo(X(ball.x + Math.cos(aim)*3.5), Y(ball.y + Math.sin(aim)*3.5)); ctx.stroke(); ctx.setLineDash([]);
+  }
+  // drag-putt line
+  if (drag && drag.mode === "shot"){
+    ctx.strokeStyle = v("--sun"); ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.moveTo(X(ball.x), Y(ball.y)); ctx.lineTo(drag.x, drag.y); ctx.stroke();
+  }
+  // ball
+  if (state !== "sunk"){
+    ctx.fillStyle = "rgba(0,0,0,.3)"; ctx.beginPath(); ctx.arc(X(ball.x)+2, Y(ball.y)+2, BALL_R*s, 0, 7); ctx.fill();
+    ctx.fillStyle = v("--chalk"); ctx.beginPath(); ctx.arc(X(ball.x), Y(ball.y), BALL_R*s, 0, 7); ctx.fill();
+  }
+}
+let lastT = performance.now();
+function loop(t){
+  const dt = Math.min(0.05, (t-lastT)/1000); lastT = t;
+  physics(dt); draw(); requestAnimationFrame(loop);
+}
+window.addEventListener("resize", fit);
+loadHole(0); requestAnimationFrame(loop);
+</script>
+</body>
+</html>
